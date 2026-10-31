@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#0a0f1d" />
-  <meta name="description" content="Build and complete a single-elimination tournament bracket with any number of teams, starting at two." />
+  <meta name="description" content="Build single- or double-elimination tournament brackets with any number of teams, starting at two." />
   <title>Bracket Studio | Make Your Picks</title>
   <style>
     :root {
@@ -26,13 +26,28 @@
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
     body { margin: 0; min-width: 320px; color: var(--text); background: radial-gradient(ellipse 65% 600px at 85% -100px, rgba(91,92,189,.20), transparent 72%), radial-gradient(ellipse 60% 540px at 0% 300px, rgba(43,139,140,.105), transparent 75%), var(--bg); }
-    button, textarea, input { font: inherit; }
+    button, textarea, input, select { font: inherit; }
     .team-count-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
     .team-count-controls label { font-size: 12px; font-weight: 800; }
     .team-count-controls input { width: 110px; padding: 9px; border: 1px solid #36465f; border-radius: 8px; color: var(--text); background: #0d1726; }
     .match-card.bye { border-style: dashed; }
+    .format-control { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; }
+    .format-control select { padding: 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); }
+    .format-help { color: var(--muted); font-size: 12px; line-height: 1.6; padding: 0 24px 12px; margin: 0; background: #101a2b; border-bottom: 1px solid #26334b; }
+    .double-section { margin-bottom: 26px; }
+    .double-section h3 { margin: 0 0 15px; color: var(--accent); font-size: 17px; }
+    .double-section.losers h3 { color: var(--purple); }
+    .double-rounds { display: flex; gap: 24px; width: max-content; align-items: flex-start; }
+    .double-round { width: 250px; display: flex; flex-direction: column; gap: 13px; }
+    .double-round h4 { margin: 0 0 3px; font-size: 14px; }
+    .double-round .match-card, .compact-grid .double-card { position: static; width: 100%; height: auto; min-height: 126px; }
+    .double-card .team-option { min-height: 30px; }
+    .match-feed { color: var(--muted); font-size: 10px; line-height: 1.4; min-height: 14px; }
+    .bracket-canvas.double-mode { min-width: 100%; }
+    .double-champion .champion-card { position: static; width: 250px; }
+
     button { cursor: pointer; }
-    button:focus-visible, textarea:focus-visible, .file-label:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-visible, .file-label:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
     button:disabled { cursor: not-allowed; }
     [hidden] { display: none !important; }
     .shell { width: min(1720px, calc(100% - 64px)); margin: 0 auto; }
@@ -219,11 +234,13 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
           <span id="viewHint">Scroll sideways and vertically to explore the bracket.</span>
         </div>
+        <div class="format-control"><label for="formatSelect">Format</label><select id="formatSelect"><option value="single">Single elimination</option><option value="double">Double elimination</option></select></div>
         <div class="segmented" role="group" aria-label="Choose bracket view">
           <button id="allViewBtn" type="button" aria-pressed="true" class="active">Full bracket</button>
           <button id="roundViewBtn" type="button" aria-pressed="false">Round view</button>
         </div>
       </div>
+      <p id="formatHelp" class="format-help">One loss eliminates a team.</p>
       <div id="fullView" class="full-view">
         <div class="bracket-scroll" id="bracketScroll" tabindex="0" aria-label="Scrollable tournament bracket">
           <div class="bracket-headings" id="bracketHeadings"></div>
@@ -288,6 +305,8 @@
       return bracket.sizes.map((size, r) => Array.from({length: size}, (_, m) => isPlayable(bracket, r, m) ? null : bracket.slots[m * 2]));
     }
     function normalizeState(candidate) {
+      if (candidate?.elimination === 'double') return DoubleEngine.normalizeState(candidate);
+      if (candidate?.elimination !== undefined && candidate.elimination !== 'single') return null;
       if (!candidate || !Array.isArray(candidate.teams) || candidate.teams.length < 2 || !Array.isArray(candidate.picks)) return null;
       const teams = candidate.teams;
       if (teams.some(t => typeof t !== 'string' || !t.trim() || t.length > 100)) return null;
@@ -295,6 +314,7 @@
       const bracket = createBracket(teams.length);
       if (candidate.picks.length !== bracket.sizes.length) return null;
       const clean = {teams: teams.map(t => t.trim()), picks: []};
+      if (candidate.elimination === 'single') clean.elimination = 'single';
       for (let r = 0; r < bracket.sizes.length; r++) {
         const arr = candidate.picks[r];
         if (!Array.isArray(arr) || arr.length !== bracket.sizes[r]) return null;
@@ -309,6 +329,7 @@
       return clean;
     }
     function countPicks(state) {
+      if (state.elimination === 'double') return DoubleEngine.evaluate(state).count;
       const bracket = createBracket(state.teams.length);
       return state.picks.reduce((total, round, r) => total + round.filter((pick, m) => Number.isInteger(pick) && isPlayable(bracket, r, m)).length, 0);
     }
@@ -320,9 +341,130 @@
       const picks = state.picks.map(arr => arr.slice());
       picks[round][match] = team;
       for (let r = round + 1; r < bracket.sizes.length; r++) picks[r][Math.floor(match / (2 ** (r - round)))] = null;
-      return {teams: state.teams, picks};
+      return {...state, picks};
     }
     return { createBracket, getEntrants, isPlayable, blankPicks, normalizeState, countPicks, chooseWinner };
+  })();
+
+  </script>
+  <script id="double-engine">
+  const DoubleEngine = (() => {
+    function createBracket(count) {
+      const base = BracketEngine.createBracket(count);
+      const rounds = base.sizes.length;
+      const nodes = [];
+      const panels = [];
+      const ref = (key, result = 'winner') => ({ key, result });
+      const add = (panel, key, sources, bucket, round, match, reset = false) => {
+        const node = { key, sources, bucket, round, match, reset, panel: panels.length - 1 };
+        nodes.push(node); panel.nodes.push(node);
+      };
+      for (let r = 0; r < rounds; r++) {
+        const panel = { group: 'Winners bracket', name: base.names[r], nodes: [] };
+        panels.push(panel);
+        for (let m = 0; m < base.sizes[r]; m++) {
+          const sources = r === 0 ? base.slots.slice(m * 2, m * 2 + 2).map(team => ({ team })) : [ref(`W${r}-${m * 2}`), ref(`W${r}-${m * 2 + 1}`)];
+          add(panel, `W${r + 1}-${m}`, sources, 'picks', r, m);
+        }
+      }
+      const loserSizes = [];
+      if (rounds > 1) {
+        loserSizes.push(base.sizes[0] / 2);
+        for (let wr = 1; wr < rounds; wr++) {
+          if (wr > 1) loserSizes.push(base.sizes[wr]);
+          loserSizes.push(base.sizes[wr]);
+        }
+      }
+      for (let r = 0; r < loserSizes.length; r++) {
+        const panel = { group: 'Losers bracket', name: `Losers round ${r + 1}`, nodes: [] };
+        panels.push(panel);
+        for (let m = 0; m < loserSizes[r]; m++) {
+          let sources;
+          if (r === 0) sources = [ref(`W1-${m * 2}`, 'loser'), ref(`W1-${m * 2 + 1}`, 'loser')];
+          else if (r % 2 === 0) sources = [ref(`L${r}-${m * 2}`), ref(`L${r}-${m * 2 + 1}`)];
+          else {
+            // Cross incoming winners-bracket losers to delay rematches.
+            const incoming = loserSizes[r] > 1 ? (m ^ 1) : m;
+            sources = [ref(`L${r}-${m}`), ref(`W${(r + 3) / 2}-${incoming}`, 'loser')];
+          }
+          add(panel, `L${r + 1}-${m}`, sources, 'loserPicks', r, m);
+        }
+      }
+      const finals = { group: 'Finals', name: 'Grand final', nodes: [] };
+      panels.push(finals);
+      const finalists = [ref(`W${rounds}-0`), rounds === 1 ? ref('W1-0', 'loser') : ref(`L${loserSizes.length}-0`)];
+      add(finals, 'F1', finalists, 'finalPicks', 0, 0);
+      add(finals, 'F2', finalists, 'finalPicks', 0, 1, true);
+      return { nodes, panels, loserSizes, base };
+    }
+    function readPick(state, node) {
+      return node.bucket === 'finalPicks' ? state.finalPicks[node.match] : state[node.bucket][node.round][node.match];
+    }
+    function writePick(state, node, value) {
+      if (node.bucket === 'finalPicks') state.finalPicks[node.match] = value;
+      else state[node.bucket][node.round][node.match] = value;
+    }
+    function evaluate(state) {
+      const bracket = createBracket(state.teams.length);
+      const results = new Map();
+      const clean = { elimination: 'double', teams: state.teams.slice(), picks: state.picks.map(a => a.slice()), loserPicks: state.loserPicks.map(a => a.slice()), finalPicks: state.finalPicks.slice() };
+      for (const node of bracket.nodes) {
+        let entrants = node.sources.map(source => source.key ? results.get(source.key)[source.result] : source.team);
+        let inactive = false;
+        if (node.reset) {
+          const first = results.get('F1');
+          inactive = Number.isInteger(first.winner) && first.winner === first.entrants[0];
+          if (!Number.isInteger(first.winner) || inactive) entrants = inactive ? [null, null] : [undefined, undefined];
+        }
+        const ready = entrants.every(v => v !== undefined);
+        const teams = entrants.filter(Number.isInteger);
+        const playable = ready && teams.length === 2;
+        const selected = readPick(state, node);
+        const picked = playable && teams.includes(selected) ? selected : null;
+        const winner = playable ? (picked === null ? undefined : picked) : ready ? (teams[0] ?? null) : undefined;
+        const loser = playable ? (picked === null ? undefined : teams.find(team => team !== picked)) : ready ? null : undefined;
+        writePick(clean, node, playable ? picked : (Number.isInteger(winner) ? winner : null));
+        results.set(node.key, { ...node, entrants, ready, playable, winner, loser, inactive });
+      }
+      const first = results.get('F1');
+      const reset = results.get('F2');
+      const resetRequired = Number.isInteger(first.winner) && first.winner === first.entrants[1];
+      const champion = resetRequired ? reset.winner : (reset.inactive ? first.winner : null);
+      const count = [...results.values()].filter(n => n.playable && Number.isInteger(n.winner)).length;
+      return { bracket, results, state: clean, champion: Number.isInteger(champion) ? champion : null, count, total: 2 * state.teams.length - 2 + (resetRequired ? 1 : 0), resetRequired };
+    }
+    function createState(teams) {
+      const bracket = createBracket(teams.length);
+      const state = { elimination: 'double', teams: teams.slice(), picks: bracket.base.sizes.map(n => Array(n).fill(null)), loserPicks: bracket.loserSizes.map(n => Array(n).fill(null)), finalPicks: [null, null] };
+      return evaluate(state).state;
+    }
+    function normalizeState(candidate) {
+      if (!candidate || !Array.isArray(candidate.teams) || candidate.teams.length < 2) return null;
+      const single = BracketEngine.normalizeState({ teams: candidate.teams, picks: BracketEngine.blankPicks(candidate.teams.length) });
+      if (!single) return null;
+      const bracket = createBracket(single.teams.length);
+      const shape = (arr, sizes) => Array.isArray(arr) && arr.length === sizes.length && sizes.every((size, r) => Array.isArray(arr[r]) && arr[r].length === size);
+      if (!shape(candidate.picks, bracket.base.sizes) || !shape(candidate.loserPicks, bracket.loserSizes) || !Array.isArray(candidate.finalPicks) || candidate.finalPicks.length !== 2) return null;
+      return evaluate({ ...candidate, teams: single.teams }).state;
+    }
+    function chooseWinner(state, key, team) {
+      const current = evaluate(state);
+      const node = current.results.get(key);
+      if (!node || !node.playable || !node.entrants.includes(team) || node.winner === team) return state;
+      const next = current.state;
+      writePick(next, node, team);
+      const affected = new Set([key]);
+      // Nodes are topologically ordered, so one pass clears both winner and loser paths.
+      for (const child of current.bracket.nodes) {
+        if (child.key === key) continue;
+        if (child.sources.some(source => affected.has(source.key)) || (child.reset && affected.has('F1'))) {
+          affected.add(child.key);
+          writePick(next, child, null);
+        }
+      }
+      return evaluate(next).state;
+    }
+    return { createBracket, evaluate, createState, normalizeState, chooseWinner };
   })();
 
   </script>
@@ -345,7 +487,7 @@
     const matchupTop = (round, index) => 28 + (index * (2 ** round) + ((2 ** round) - 1) / 2) * STEP_Y;
     const roundComplete = round => state.picks[round].filter((v, m) => Number.isInteger(v) && BracketEngine.isPlayable(bracket, round, m)).length;
     const roundTotal = round => bracket.sizes[round] - (round === 0 ? bracket.byes : 0);
-    const champion = () => state.picks[bracket.sizes.length - 1][0];
+    const champion = () => isDouble() ? doubleTournament.champion : state.picks[bracket.sizes.length - 1][0];
     const checkIcon = '<svg class="check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>';
     const trophyIcon = '<svg class="trophy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 21h8M12 17v4M7 4h10v6a5 5 0 0 1-10 0V4ZM7 6H4v2a4 4 0 0 0 4 4M17 6h3v2a4 4 0 0 1-4 4"/></svg>';
 
@@ -358,6 +500,8 @@
     }
     let state = loadState();
     let bracket = createBracket(state.teams.length);
+    let doubleTournament = null;
+    const isDouble = () => state.elimination === 'double';
     let mode = window.innerWidth < 920 || state.teams.length > 256 ? 'round' : 'all';
     let activeRound = 0;
     let toastTimer;
@@ -432,10 +576,10 @@
     }
 
     function renderStats() {
-      const count = countPicks(state);
-      const total = state.teams.length - 1;
+      const count = isDouble() ? doubleTournament.count : countPicks(state);
+      const total = isDouble() ? doubleTournament.total : state.teams.length - 1;
       $('#teamCount').textContent = state.teams.length;
-      $('#tournamentType').textContent = `${state.teams.length}-team single elimination`;
+      $('#tournamentType').textContent = `${state.teams.length}-team ${isDouble() ? 'double' : 'single'} elimination`;
       $('#picksCount').textContent = `${count} / ${total}`;
       $('#championSummary').textContent = champion() === null ? 'Not decided' : state.teams[champion()];
       $('#progressFill').style.width = `${(count / total) * 100}%`;
@@ -443,12 +587,16 @@
       $('#progressBar').setAttribute('aria-valuemax', String(total));
     }
     function renderFull() {
+      $('#bracketCanvas').classList.toggle('double-mode', isDouble());
+      $('#bracketHeadings').hidden = isDouble();
+      if (isDouble()) { renderDoubleFull(); return; }
       $('#bracketHeadings').innerHTML = bracket.names.map((name, r) => `<div class="bracket-heading"><span class="round-num">Round ${r + 1}</span><span class="round-title">${name}</span><span class="round-progress">${roundComplete(r)} of ${roundTotal(r)} decided${r === 0 && bracket.byes ? `, ${bracket.byes} byes` : ''}</span></div>`).join('') + '<div class="bracket-heading"><span class="round-num">The winner</span><span class="round-title">Champion</span><span class="round-progress">One team remains</span></div>';
       $('#bracketCanvas').style.width = `${(bracket.sizes.length * STEP_X + CARD_W)}px`;
       $('#bracketCanvas').style.height = `${((bracket.sizes[0] - 1) * STEP_Y + CARD_H + 60)}px`;
       $('#bracketCanvas').innerHTML = connectionMarkup() + bracket.sizes.map((size, r) => Array.from({length: size}, (_, m) => matchMarkup(r, m)).join('')).join('') + championMarkup();
     }
     function renderCompact() {
+      if (isDouble()) { renderDoubleCompact(); return; }
       $('#roundTabs').innerHTML = [...bracket.names, 'Champion'].map((name, r) => `<button class="round-tab${r === activeRound ? ' active' : ''}" role="tab" aria-selected="${r === activeRound}" type="button" data-tab="${r}">${escapeHTML(name)}</button>`).join('');
       if (activeRound === bracket.sizes.length) {
         $('#compactTitle').textContent = 'Champion';
@@ -462,7 +610,10 @@
     }
     function render() {
       bracket = createBracket(state.teams.length);
-      activeRound = Math.min(activeRound, bracket.sizes.length);
+      doubleTournament = isDouble() ? DoubleEngine.evaluate(state) : null;
+      activeRound = Math.min(activeRound, isDouble() ? doubleTournament.bracket.panels.length : bracket.sizes.length);
+      $('#formatSelect').value = isDouble() ? 'double' : 'single';
+      $('#formatHelp').textContent = isDouble() ? 'Two losses eliminate a team. First-round byes advance automatically. If the losers-bracket finalist wins the grand final, a reset match decides the champion.' : 'One loss eliminates a team. First-round byes advance automatically.';
       renderStats();
       if (mode === 'all') renderFull(); else renderCompact();
       $('#fullView').hidden = mode !== 'all';
@@ -472,6 +623,86 @@
       $('#allViewBtn').setAttribute('aria-pressed', String(mode === 'all'));
       $('#roundViewBtn').setAttribute('aria-pressed', String(mode === 'round'));
       $('#viewHint').textContent = mode === 'all' ? 'Scroll sideways and vertically to explore the bracket.' : 'Select a round above to make or review your picks.';
+    }
+
+    function emptyState(teams, elimination = state.elimination || 'single') {
+      return elimination === 'double' ? DoubleEngine.createState(teams) : { elimination: 'single', teams: teams.slice(), picks: blankPicks(teams.length) };
+    }
+    function changeFormat() {
+      const elimination = $('#formatSelect').value;
+      if (!['single', 'double'].includes(elimination) || elimination === (state.elimination || 'single')) return;
+      if (countPicks(state) && !window.confirm('Changing the format clears your picks. Continue?')) {
+        $('#formatSelect').value = state.elimination || 'single';
+        return;
+      }
+      state = emptyState(state.teams, elimination);
+      activeRound = 0;
+      persist(); render();
+      notify(`${elimination === 'double' ? 'Double' : 'Single'} elimination bracket is ready.`);
+    }
+    function selectDoubleWinner(key, team) {
+      const next = DoubleEngine.chooseWinner(state, key, team);
+      if (next === state) return;
+      state = next;
+      const tournament = DoubleEngine.evaluate(state);
+      if (mode === 'round') {
+        while (activeRound < tournament.bracket.panels.length && tournament.bracket.panels[activeRound].nodes.every(n => tournament.results.get(n.key).winner !== undefined)) activeRound++;
+      }
+      persist(); render();
+      if (tournament.champion !== null) notify(`${state.teams[tournament.champion]} is your champion!`);
+      else if (key === 'F1' && tournament.resetRequired) notify('Bracket reset! Both finalists now have one loss. Pick the deciding match.');
+    }
+    function doubleLabel(node) {
+      if (node.key === 'F1') return 'Grand final';
+      if (node.key === 'F2') return 'Final reset';
+      const [round, match] = node.key.split('-');
+      return `${round} match ${Number(match) + 1}`;
+    }
+    function sourceLabel(source) {
+      if (!source.key) return source.team === null ? 'Bye' : `Team ${source.team + 1}`;
+      const node = doubleTournament.results.get(source.key);
+      return `${source.result === 'loser' ? 'Loser' : 'Winner'} of ${doubleLabel(node)}`;
+    }
+    function doubleMatchMarkup(node) {
+      const decided = Number.isInteger(node.winner);
+      const automatic = node.ready && !node.playable;
+      const status = node.inactive ? 'Not needed' : node.reset && !node.ready ? 'If needed' : automatic ? (decided ? 'Bye: advances' : 'No match') : decided ? 'Decided' : 'Pending';
+      const buttons = node.entrants.map((team, index) => {
+        const available = Number.isInteger(team);
+        const name = available ? state.teams[team] : team === null ? 'Bye' : 'Awaiting result';
+        const selected = available && node.winner === team;
+        const aria = automatic && available ? `${name} advances automatically with a bye` : `Select ${name} to win ${doubleLabel(node)}`;
+        return `<button type="button" class="team-option${selected ? ' selected' : ''}" ${!node.playable ? 'disabled' : ''} data-key="${node.key}" data-team="${available ? team : ''}" aria-pressed="${selected}" aria-label="${escapeHTML(aria)}" title="${escapeHTML(sourceLabel(node.sources[index]))}"><span class="name">${escapeHTML(name)}</span>${selected ? checkIcon : ''}</button>`;
+      }).join('');
+      const feed = node.reset ? (node.inactive ? 'The winners-bracket finalist won the grand final.' : 'Played only if the losers-bracket finalist wins the grand final.') : node.sources.filter(s => s.key).map(sourceLabel).join(' / ');
+      return `<article class="match-card double-card${decided ? ' resolved' : ''}${automatic ? ' bye' : ''}" aria-label="${escapeHTML(doubleLabel(node))}"><div class="match-header"><span>${doubleLabel(node)}</span><span class="${decided ? 'done' : ''}">${status}</span></div><div class="match-feed">${escapeHTML(feed)}</div>${buttons}</article>`;
+    }
+    function renderDoubleFull() {
+      $('#bracketHeadings').innerHTML = '';
+      $('#bracketCanvas').style.width = 'max-content';
+      $('#bracketCanvas').style.height = 'auto';
+      $('#bracketCanvas').innerHTML = ['Winners bracket', 'Losers bracket', 'Finals'].map(group => {
+        const panels = doubleTournament.bracket.panels.filter(panel => panel.group === group);
+        if (!panels.length) return '';
+        return `<section class="double-section${group === 'Losers bracket' ? ' losers' : ''}"><h3>${group}</h3><div class="double-rounds">${panels.map(panel => `<section class="double-round"><h4>${panel.name}</h4>${panel.nodes.map(n => doubleMatchMarkup(doubleTournament.results.get(n.key))).join('')}</section>`).join('')}</div></section>`;
+      }).join('') + `<div class="double-champion">${championMarkup(true)}</div>`;
+    }
+    function renderDoubleCompact() {
+      const panels = doubleTournament.bracket.panels;
+      $('#roundTabs').innerHTML = [...panels.map(p => p.group === 'Winners bracket' ? `Winners: ${p.name}` : p.name), 'Champion'].map((name, r) => `<button class="round-tab${r === activeRound ? ' active' : ''}" role="tab" aria-selected="${r === activeRound}" type="button" data-tab="${r}">${escapeHTML(name)}</button>`).join('');
+      if (activeRound === panels.length) {
+        $('#compactTitle').textContent = 'Champion';
+        $('#compactProgress').textContent = doubleTournament.champion === null ? 'Final pick pending' : 'Tournament complete';
+        $('#compactGrid').innerHTML = championMarkup(true);
+        return;
+      }
+      const panel = panels[activeRound];
+      const nodes = panel.nodes.map(n => doubleTournament.results.get(n.key));
+      const count = nodes.filter(n => n.playable && Number.isInteger(n.winner)).length;
+      const total = nodes.filter(n => !n.inactive && !(n.reset && !doubleTournament.resetRequired) && !(n.ready && !n.playable)).length;
+      $('#compactTitle').textContent = panel.group === 'Winners bracket' ? `Winners: ${panel.name}` : panel.name;
+      $('#compactProgress').textContent = `${count} of ${total} decided`;
+      $('#compactGrid').innerHTML = nodes.map(doubleMatchMarkup).join('');
     }
 
     function openEditor() {
@@ -511,7 +742,7 @@
       const resized = names.length !== state.teams.length;
       if (resized && countPicks(state) && !window.confirm('Changing the team count will clear your picks. Continue?')) return;
       state.teams = names;
-      if (resized) { state.picks = blankPicks(names.length); activeRound = 0; if (names.length > 256) mode = 'round'; }
+      if (resized) { state = emptyState(names); activeRound = 0; if (names.length > 256) mode = 'round'; }
       persist();
       $('#teamDialog').close();
       render();
@@ -524,17 +755,19 @@
         const j = Math.floor(Math.random() * (i + 1));
         [state.teams[i], state.teams[j]] = [state.teams[j], state.teams[i]];
       }
-      state.picks = blankPicks(state.teams.length);
+      state = emptyState(state.teams);
+      activeRound = 0;
       persist(); render(); notify('Teams shuffled and picks reset.');
     }
     function reset() {
       if (!countPicks(state)) { notify('There are no picks to reset.'); return; }
-      if (!window.confirm(`Clear all ${state.teams.length - 1} winner selections? Team names and matchups will stay the same.`)) return;
-      state.picks = blankPicks(state.teams.length);
+      if (!window.confirm('Clear all winner selections? Team names, format, and matchups will stay the same.')) return;
+      state = emptyState(state.teams);
+      activeRound = 0;
       persist(); render(); notify('All picks cleared.');
     }
     function exportFile() {
-      const data = {format: 'Bracket Studio', version: 2, exportedAt: new Date().toISOString(), ...state};
+      const data = {format: 'Bracket Studio', version: 3, exportedAt: new Date().toISOString(), ...state};
       const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -564,13 +797,17 @@
 
     document.addEventListener('click', e => {
       const team = e.target.closest('.team-option');
-      if (team && !team.disabled) selectWinner(Number(team.dataset.round), Number(team.dataset.match), Number(team.dataset.team));
+      if (team && !team.disabled) {
+        if (team.dataset.key) selectDoubleWinner(team.dataset.key, Number(team.dataset.team));
+        else selectWinner(Number(team.dataset.round), Number(team.dataset.match), Number(team.dataset.team));
+      }
       const tab = e.target.closest('[data-tab]');
       if (tab) {
         activeRound = Number(tab.dataset.tab);
         renderCompact();
       }
     });
+    $('#formatSelect').addEventListener('change', changeFormat);
     $('#editBtn').addEventListener('click', openEditor);
     $('#closeDialogBtn').addEventListener('click', () => $('#teamDialog').close());
     $('#cancelDialogBtn').addEventListener('click', () => $('#teamDialog').close());
