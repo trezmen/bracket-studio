@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#0a0f1d" />
-  <meta name="description" content="Build and complete a 64-team single-elimination tournament bracket." />
+  <meta name="description" content="Build and complete a single-elimination tournament bracket with any number of teams, starting at two." />
   <title>Bracket Studio | Make Your Picks</title>
   <style>
     :root {
@@ -27,6 +27,10 @@
     html { scroll-behavior: smooth; }
     body { margin: 0; min-width: 320px; color: var(--text); background: radial-gradient(ellipse 65% 600px at 85% -100px, rgba(91,92,189,.20), transparent 72%), radial-gradient(ellipse 60% 540px at 0% 300px, rgba(43,139,140,.105), transparent 75%), var(--bg); }
     button, textarea, input { font: inherit; }
+    .team-count-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+    .team-count-controls label { font-size: 12px; font-weight: 800; }
+    .team-count-controls input { width: 110px; padding: 9px; border: 1px solid #36465f; border-radius: 8px; color: var(--text); background: #0d1726; }
+    .match-card.bye { border-style: dashed; }
     button { cursor: pointer; }
     button:focus-visible, textarea:focus-visible, .file-label:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
     button:disabled { cursor: not-allowed; }
@@ -190,12 +194,12 @@
   <main id="main" class="shell">
     <section class="hero" aria-label="Tournament overview">
       <div>
-        <div class="eyebrow">64-team single elimination</div>
+        <div class="eyebrow" id="tournamentType">Single elimination</div>
         <h1>Every pick brings<br>you closer to a champion.</h1>
         <p>Fill your bracket one matchup at a time. Choose a team to advance, and the next round updates automatically. Your progress is saved in this browser.</p>
       </div>
       <div class="stats" aria-label="Tournament statistics">
-        <div class="stat"><div class="stat-label">Teams</div><div class="stat-value">64</div></div>
+        <div class="stat"><div class="stat-label">Teams</div><div class="stat-value" id="teamCount">64</div></div>
         <div class="stat"><div class="stat-label">Picks made</div><div class="stat-value" id="picksCount">0 / 63</div></div>
         <div class="stat"><div class="stat-label">Champion</div><div class="stat-value champ" id="championSummary">Not decided</div></div>
       </div>
@@ -237,11 +241,12 @@
 
   <dialog id="teamDialog" aria-labelledby="editorTitle">
     <div class="dialog-heading">
-      <div><h2 id="editorTitle">Edit your 64 teams</h2><p>Enter exactly 64 unique names, one per line, in the order you want them matched. Teams 1 and 2 play each other, then 3 and 4, and so on.</p></div>
+      <div><h2 id="editorTitle">Edit your teams</h2><p>Enter at least two unique names, one per line. Teams are matched in list order, with automatic first-round byes when needed. Changing the team count resets your picks.</p></div>
       <button class="close-btn" id="closeDialogBtn" type="button" aria-label="Close editor">&times;</button>
     </div>
     <div class="dialog-body">
-      <div class="editor-top"><label for="teamNames">Team names</label><span id="teamLineCount">64 / 64 teams</span></div>
+      <div class="team-count-controls"><label for="teamCountInput">Number of teams</label><input id="teamCountInput" type="number" min="2" step="1" value="64" aria-describedby="editorError" /><button type="button" class="button small ghost" id="resizeTeamsBtn">Resize list</button></div>
+      <div class="editor-top"><label for="teamNames">Team names</label><span id="teamLineCount">64 teams</span></div>
       <textarea id="teamNames" spellcheck="false" aria-describedby="editorError"></textarea>
       <p class="error" id="editorError" role="alert"></p>
       <div class="dialog-actions">
@@ -254,57 +259,106 @@
   <input id="importInput" type="file" accept=".json,application/json" hidden aria-label="Import saved bracket file" />
   <div class="toast" role="status" aria-live="polite" id="toast"></div>
 
-  <script>
-  (() => {
-    'use strict';
-    const STORAGE_KEY = 'bracket-studio-64-v1';
-    const SIZES = [32, 16, 8, 4, 2, 1];
-    const NAMES = ['Round of 64', 'Round of 32', 'Round of 16', 'Quarterfinals', 'Semifinals', 'Final'];
-    const SHORT = ['64 teams', '32 teams', '16 teams', '8 teams', '4 teams', '2 teams'];
-    const CARD_W = 220;
-    const CARD_H = 94;
-    const STEP_X = 260;
-    const STEP_Y = 106;
-    const TOTAL_W = 6 * STEP_X + CARD_W;
-    const TOTAL_H = 31 * STEP_Y + CARD_H + 30;
-    const $ = selector => document.querySelector(selector);
-    const defaultTeams = () => Array.from({length: 64}, (_, i) => `Team ${String(i + 1).padStart(2, '0')}`);
-    const blankPicks = () => SIZES.map(n => Array(n).fill(null));
-    const freshState = () => ({ teams: defaultTeams(), picks: blankPicks() });
-    const escapeHTML = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
-    const getEntrants = (picks, round, match) => round === 0 ? [match * 2, match * 2 + 1] : [picks[round - 1][match * 2], picks[round - 1][match * 2 + 1]];
-    const matchupTop = (round, index) => (index * (2 ** round) + ((2 ** round) - 1) / 2) * STEP_Y;
-    const roundComplete = round => state.picks[round].filter(v => Number.isInteger(v)).length;
-    const checkIcon = '<svg class="check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>';
-    const trophyIcon = '<svg class="trophy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 21h8M12 17v4M7 4h10v6a5 5 0 0 1-10 0V4ZM7 6H4v2a4 4 0 0 0 4 4M17 6h3v2a4 4 0 0 1-4 4"/></svg>';
-
-    function validateState(candidate) {
-      if (!candidate || !Array.isArray(candidate.teams) || candidate.teams.length !== 64 || !Array.isArray(candidate.picks) || candidate.picks.length !== 6) return null;
-      if (candidate.teams.some(t => typeof t !== 'string' || !t.trim() || t.length > 100)) return null;
-      const clean = {teams: candidate.teams.slice(), picks: []};
-      for (let r = 0; r < SIZES.length; r++) {
-        const arr = candidate.picks[r];
-        if (!Array.isArray(arr) || arr.length !== SIZES[r]) return null;
-        clean.picks.push(arr.slice());
+  <script id="bracket-engine">
+  const BracketEngine = (() => {
+    function createBracket(count) {
+      if (!Number.isSafeInteger(count) || count < 2) throw new RangeError('At least two teams are required.');
+      const rounds = Math.ceil(Math.log2(count));
+      const capacity = 2 ** rounds;
+      const sizes = Array.from({length: rounds}, (_, r) => capacity / (2 ** (r + 1)));
+      const byes = capacity - count;
+      const slots = [];
+      let team = 0;
+      for (let m = 0; m < sizes[0]; m++) {
+        // Spread byes through the first round without creating an empty match.
+        const bye = Math.floor((m + 1) * byes / sizes[0]) > Math.floor(m * byes / sizes[0]);
+        slots.push(team++, bye ? null : team++);
       }
-      for (let r = 0; r < SIZES.length; r++) {
-        for (let m = 0; m < SIZES[r]; m++) {
-          const entrants = getEntrants(clean.picks, r, m);
-          const picked = clean.picks[r][m];
-          if (picked === null) continue;
-          if (!Number.isInteger(picked) || !entrants.every(Number.isInteger) || !entrants.includes(picked)) clean.picks[r][m] = null;
+      const names = sizes.map(n => n === 1 ? 'Final' : n === 2 ? 'Semifinals' : n === 4 ? 'Quarterfinals' : `Round of ${n * 2}`);
+      return { sizes, names, slots, byes };
+    }
+    function getEntrants(bracket, picks, round, match) {
+      return round === 0 ? bracket.slots.slice(match * 2, match * 2 + 2) : [picks[round - 1][match * 2], picks[round - 1][match * 2 + 1]];
+    }
+    function isPlayable(bracket, round, match) {
+      return round !== 0 || bracket.slots[match * 2 + 1] !== null;
+    }
+    function blankPicks(count) {
+      const bracket = createBracket(count);
+      return bracket.sizes.map((size, r) => Array.from({length: size}, (_, m) => isPlayable(bracket, r, m) ? null : bracket.slots[m * 2]));
+    }
+    function normalizeState(candidate) {
+      if (!candidate || !Array.isArray(candidate.teams) || candidate.teams.length < 2 || !Array.isArray(candidate.picks)) return null;
+      const teams = candidate.teams;
+      if (teams.some(t => typeof t !== 'string' || !t.trim() || t.length > 100)) return null;
+      if (new Set(teams.map(t => t.trim().toLowerCase())).size !== teams.length) return null;
+      const bracket = createBracket(teams.length);
+      if (candidate.picks.length !== bracket.sizes.length) return null;
+      const clean = {teams: teams.map(t => t.trim()), picks: []};
+      for (let r = 0; r < bracket.sizes.length; r++) {
+        const arr = candidate.picks[r];
+        if (!Array.isArray(arr) || arr.length !== bracket.sizes[r]) return null;
+        clean.picks.push(arr.slice());
+        for (let m = 0; m < arr.length; m++) {
+          const entrants = getEntrants(bracket, clean.picks, r, m);
+          const pick = arr[m];
+          clean.picks[r][m] = !isPlayable(bracket, r, m) ? entrants[0] :
+            (Number.isInteger(pick) && entrants.every(Number.isInteger) && entrants.includes(pick) ? pick : null);
         }
       }
       return clean;
     }
+    function countPicks(state) {
+      const bracket = createBracket(state.teams.length);
+      return state.picks.reduce((total, round, r) => total + round.filter((pick, m) => Number.isInteger(pick) && isPlayable(bracket, r, m)).length, 0);
+    }
+    function chooseWinner(state, round, match, team) {
+      const bracket = createBracket(state.teams.length);
+      if (!Number.isInteger(round) || !Number.isInteger(match) || round < 0 || round >= bracket.sizes.length || match < 0 || match >= bracket.sizes[round]) return state;
+      const entrants = getEntrants(bracket, state.picks, round, match);
+      if (!isPlayable(bracket, round, match) || !entrants.every(Number.isInteger) || !entrants.includes(team) || state.picks[round][match] === team) return state;
+      const picks = state.picks.map(arr => arr.slice());
+      picks[round][match] = team;
+      for (let r = round + 1; r < bracket.sizes.length; r++) picks[r][Math.floor(match / (2 ** (r - round)))] = null;
+      return {teams: state.teams, picks};
+    }
+    return { createBracket, getEntrants, isPlayable, blankPicks, normalizeState, countPicks, chooseWinner };
+  })();
+
+  </script>
+  <script>
+  (() => {
+    'use strict';
+    const STORAGE_KEY = 'bracket-studio-v2';
+    const { createBracket, normalizeState, countPicks } = BracketEngine;
+    const CARD_W = 220;
+    const CARD_H = 94;
+    const STEP_X = 260;
+    const STEP_Y = 106;
+
+    const $ = selector => document.querySelector(selector);
+    const defaultTeams = (count = 64) => Array.from({length: count}, (_, i) => `Team ${String(i + 1).padStart(2, '0')}`);
+    const blankPicks = (count = 64) => BracketEngine.blankPicks(count);
+    const freshState = () => ({ teams: defaultTeams(), picks: blankPicks() });
+    const escapeHTML = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
+    const getEntrants = (picks, round, match) => BracketEngine.getEntrants(bracket, picks, round, match);
+    const matchupTop = (round, index) => 28 + (index * (2 ** round) + ((2 ** round) - 1) / 2) * STEP_Y;
+    const roundComplete = round => state.picks[round].filter((v, m) => Number.isInteger(v) && BracketEngine.isPlayable(bracket, round, m)).length;
+    const roundTotal = round => bracket.sizes[round] - (round === 0 ? bracket.byes : 0);
+    const champion = () => state.picks[bracket.sizes.length - 1][0];
+    const checkIcon = '<svg class="check" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>';
+    const trophyIcon = '<svg class="trophy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 21h8M12 17v4M7 4h10v6a5 5 0 0 1-10 0V4ZM7 6H4v2a4 4 0 0 0 4 4M17 6h3v2a4 4 0 0 1-4 4"/></svg>';
+
+    const validateState = normalizeState;
     function loadState() {
       try {
-        const saved = localStorage.getItem(STORAGE_KEY);
+        const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('bracket-studio-64-v1');
         return saved ? (validateState(JSON.parse(saved)) || freshState()) : freshState();
       } catch (_) { return freshState(); }
     }
     let state = loadState();
-    let mode = window.innerWidth < 920 ? 'round' : 'all';
+    let bracket = createBracket(state.teams.length);
+    let mode = window.innerWidth < 920 || state.teams.length > 256 ? 'round' : 'all';
     let activeRound = 0;
     let toastTimer;
 
@@ -321,91 +375,94 @@
     }
 
     function selectWinner(round, match, team) {
-      const entrants = getEntrants(state.picks, round, match);
-      if (!entrants.every(Number.isInteger) || !entrants.includes(team)) return;
-      if (state.picks[round][match] === team) return;
-      const wasFinished = roundComplete(round) === SIZES[round];
-      state.picks[round][match] = team;
-      for (let subsequent = round + 1; subsequent < SIZES.length; subsequent++) {
-        state.picks[subsequent][Math.floor(match / (2 ** (subsequent - round)))] = null;
-      }
-      const roundFinished = roundComplete(round) === SIZES[round];
+      const wasFinished = roundComplete(round) === roundTotal(round);
+      const next = BracketEngine.chooseWinner(state, round, match, team);
+      if (next === state) return;
+      state = next;
+      const roundFinished = roundComplete(round) === roundTotal(round);
       if (mode === 'round' && activeRound === round && roundFinished && !wasFinished) activeRound = round + 1;
       persist();
       render();
-      if (round === 5) notify(`${state.teams[team]} is your champion!`);
-      else if (roundFinished && !wasFinished) notify(`${NAMES[round]} complete. ${NAMES[round + 1]} is ready.`);
+      if (round === bracket.sizes.length - 1) notify(`${state.teams[team]} is your champion!`);
+      else if (roundFinished && !wasFinished) notify(`${bracket.names[round]} complete. ${bracket.names[round + 1]} is ready.`);
     }
 
     function matchMarkup(round, match, compact = false) {
       const [a, b] = getEntrants(state.picks, round, match);
       const choice = state.picks[round][match];
       const resolved = Number.isInteger(choice);
-      const locked = !Number.isInteger(a) || !Number.isInteger(b);
+      const bye = round === 0 && !BracketEngine.isPlayable(bracket, round, match);
+      const locked = bye || !Number.isInteger(a) || !Number.isInteger(b);
       const opts = [a, b].map((id, idx) => {
         const available = Number.isInteger(id);
         const isSelected = available && choice === id;
-        const name = available ? state.teams[id] : 'Awaiting winner';
-        const aria = available ? `Select ${name} to win match ${match + 1} in ${NAMES[round]}` : 'Waiting for previous round winner';
-        return `<button type="button" class="team-option${isSelected ? ' selected' : ''}" ${locked ? 'disabled' : ''} data-round="${round}" data-match="${match}" data-team="${available ? id : ''}" aria-pressed="${isSelected}" aria-label="${escapeHTML(aria)}" title="${escapeHTML(name)}"><span class="name">${round === 0 ? `<span class="seed">${String(id + 1).padStart(2, '0')}</span>` : ''}${escapeHTML(name)}</span>${isSelected ? checkIcon : ''}</button>`;
+        const name = available ? state.teams[id] : (bye ? 'Bye' : 'Awaiting winner');
+        const aria = available ? (bye ? `${name} advances automatically with a bye` : `Select ${name} to win match ${match + 1} in ${bracket.names[round]}`) : (bye ? 'Bye: no opponent' : 'Waiting for previous round winner');
+        return `<button type="button" class="team-option${isSelected ? ' selected' : ''}" ${locked ? 'disabled' : ''} data-round="${round}" data-match="${match}" data-team="${available ? id : ''}" aria-pressed="${isSelected}" aria-label="${escapeHTML(aria)}" title="${escapeHTML(name)}"><span class="name">${round === 0 && available ? `<span class="seed">${String(id + 1).padStart(2, '0')}</span>` : ''}${escapeHTML(name)}</span>${isSelected ? checkIcon : ''}</button>`;
       }).join('');
       const style = compact ? '' : `style="left:${round * STEP_X}px;top:${matchupTop(round, match)}px;width:${CARD_W}px;height:${CARD_H}px"`;
-      return `<article class="match-card${resolved ? ' resolved' : ''}" ${style} aria-label="${NAMES[round]}, match ${match + 1}"><div class="match-header"><span>Match ${String(match + 1).padStart(2, '0')}</span>${resolved ? '<span class="done">Decided</span>' : ''}</div>${opts}</article>`;
+      return `<article class="match-card${resolved ? ' resolved' : ''}${bye ? ' bye' : ''}" ${style} aria-label="${bracket.names[round]}, match ${match + 1}"><div class="match-header"><span>Match ${String(match + 1).padStart(2, '0')}</span>${bye ? '<span class="done">Bye: advances</span>' : (resolved ? '<span class="done">Decided</span>' : '')}</div>${opts}</article>`;
     }
 
     function championMarkup(compact = false) {
-      const champion = state.picks[5][0];
-      const chosen = Number.isInteger(champion);
-      const top = matchupTop(5, 0) + CARD_H / 2 - 75;
-      const style = compact ? '' : `style="left:${6 * STEP_X}px;top:${top}px;width:${CARD_W}px"`;
-      return `<div class="champion-card${chosen ? '' : ' empty'}" ${style} aria-live="polite">${trophyIcon}<div class="champ-caption">Tournament champion</div><div class="champ-name">${chosen ? escapeHTML(state.teams[champion]) : 'Winner to be decided'}</div></div>`;
+      const winner = champion();
+      const chosen = Number.isInteger(winner);
+      const top = matchupTop(bracket.sizes.length - 1, 0) + CARD_H / 2 - 75;
+      const style = compact ? '' : `style="left:${bracket.sizes.length * STEP_X}px;top:${top}px;width:${CARD_W}px"`;
+      return `<div class="champion-card${chosen ? '' : ' empty'}" ${style} aria-live="polite">${trophyIcon}<div class="champ-caption">Tournament champion</div><div class="champ-name">${chosen ? escapeHTML(state.teams[winner]) : 'Winner to be decided'}</div></div>`;
     }
 
     function connectionMarkup() {
       let d = '';
-      for (let r = 0; r < 5; r++) {
+      for (let r = 0; r < bracket.sizes.length - 1; r++) {
         const x1 = r * STEP_X + CARD_W;
         const mid = x1 + (STEP_X - CARD_W) / 2;
         const x2 = (r + 1) * STEP_X;
-        for (let i = 0; i < SIZES[r + 1]; i++) {
+        for (let i = 0; i < bracket.sizes[r + 1]; i++) {
           const y1 = matchupTop(r, 2 * i) + CARD_H / 2;
           const y2 = matchupTop(r, 2 * i + 1) + CARD_H / 2;
           const yp = matchupTop(r + 1, i) + CARD_H / 2;
           d += `M${x1} ${y1} H${mid} V${y2} H${x1} M${mid} ${yp} H${x2} `;
         }
       }
-      const r = 5;
+      const r = bracket.sizes.length - 1;
       const yy = matchupTop(r, 0) + CARD_H / 2;
-      d += `M${r * STEP_X + CARD_W} ${yy} H${6 * STEP_X}`;
-      return `<svg class="bracket-lines" aria-hidden="true" width="${TOTAL_W}" height="${TOTAL_H}" viewBox="0 0 ${TOTAL_W} ${TOTAL_H}" preserveAspectRatio="none"><path d="${d}"/></svg>`;
+      d += `M${r * STEP_X + CARD_W} ${yy} H${bracket.sizes.length * STEP_X}`;
+      return `<svg class="bracket-lines" aria-hidden="true" width="${(bracket.sizes.length * STEP_X + CARD_W)}" height="${((bracket.sizes[0] - 1) * STEP_Y + CARD_H + 60)}" viewBox="0 0 ${(bracket.sizes.length * STEP_X + CARD_W)} ${((bracket.sizes[0] - 1) * STEP_Y + CARD_H + 60)}" preserveAspectRatio="none"><path d="${d}"/></svg>`;
     }
 
     function renderStats() {
-      const count = state.picks.flat().filter(Number.isInteger).length;
-      $('#picksCount').textContent = `${count} / 63`;
-      $('#championSummary').textContent = state.picks[5][0] === null ? 'Not decided' : state.teams[state.picks[5][0]];
-      $('#progressFill').style.width = `${(count / 63) * 100}%`;
+      const count = countPicks(state);
+      const total = state.teams.length - 1;
+      $('#teamCount').textContent = state.teams.length;
+      $('#tournamentType').textContent = `${state.teams.length}-team single elimination`;
+      $('#picksCount').textContent = `${count} / ${total}`;
+      $('#championSummary').textContent = champion() === null ? 'Not decided' : state.teams[champion()];
+      $('#progressFill').style.width = `${(count / total) * 100}%`;
       $('#progressBar').setAttribute('aria-valuenow', String(count));
+      $('#progressBar').setAttribute('aria-valuemax', String(total));
     }
     function renderFull() {
-      $('#bracketHeadings').innerHTML = NAMES.map((name, r) => `<div class="bracket-heading"><span class="round-num">Round ${r + 1}</span><span class="round-title">${name}</span><span class="round-progress">${roundComplete(r)} of ${SIZES[r]} decided</span></div>`).join('') + '<div class="bracket-heading"><span class="round-num">The winner</span><span class="round-title">Champion</span><span class="round-progress">One team remains</span></div>';
-      $('#bracketCanvas').style.width = `${TOTAL_W}px`;
-      $('#bracketCanvas').style.height = `${TOTAL_H}px`;
-      $('#bracketCanvas').innerHTML = connectionMarkup() + SIZES.map((size, r) => Array.from({length: size}, (_, m) => matchMarkup(r, m)).join('')).join('') + championMarkup();
+      $('#bracketHeadings').innerHTML = bracket.names.map((name, r) => `<div class="bracket-heading"><span class="round-num">Round ${r + 1}</span><span class="round-title">${name}</span><span class="round-progress">${roundComplete(r)} of ${roundTotal(r)} decided${r === 0 && bracket.byes ? `, ${bracket.byes} byes` : ''}</span></div>`).join('') + '<div class="bracket-heading"><span class="round-num">The winner</span><span class="round-title">Champion</span><span class="round-progress">One team remains</span></div>';
+      $('#bracketCanvas').style.width = `${(bracket.sizes.length * STEP_X + CARD_W)}px`;
+      $('#bracketCanvas').style.height = `${((bracket.sizes[0] - 1) * STEP_Y + CARD_H + 60)}px`;
+      $('#bracketCanvas').innerHTML = connectionMarkup() + bracket.sizes.map((size, r) => Array.from({length: size}, (_, m) => matchMarkup(r, m)).join('')).join('') + championMarkup();
     }
     function renderCompact() {
-      $('#roundTabs').innerHTML = [...NAMES, 'Champion'].map((name, r) => `<button class="round-tab${r === activeRound ? ' active' : ''}" role="tab" aria-selected="${r === activeRound}" type="button" data-tab="${r}">${escapeHTML(name)}</button>`).join('');
-      if (activeRound === 6) {
+      $('#roundTabs').innerHTML = [...bracket.names, 'Champion'].map((name, r) => `<button class="round-tab${r === activeRound ? ' active' : ''}" role="tab" aria-selected="${r === activeRound}" type="button" data-tab="${r}">${escapeHTML(name)}</button>`).join('');
+      if (activeRound === bracket.sizes.length) {
         $('#compactTitle').textContent = 'Champion';
-        $('#compactProgress').textContent = state.picks[5][0] !== null ? 'Tournament complete' : 'Final pick pending';
+        $('#compactProgress').textContent = champion() !== null ? 'Tournament complete' : 'Final pick pending';
         $('#compactGrid').innerHTML = championMarkup(true);
       } else {
-        $('#compactTitle').textContent = NAMES[activeRound];
-        $('#compactProgress').textContent = `${roundComplete(activeRound)} of ${SIZES[activeRound]} decided`;
-        $('#compactGrid').innerHTML = Array.from({length: SIZES[activeRound]}, (_, m) => matchMarkup(activeRound, m, true)).join('');
+        $('#compactTitle').textContent = bracket.names[activeRound];
+        $('#compactProgress').textContent = `${roundComplete(activeRound)} of ${roundTotal(activeRound)} decided${activeRound === 0 && bracket.byes ? `, ${bracket.byes} byes` : ''}`;
+        $('#compactGrid').innerHTML = Array.from({length: bracket.sizes[activeRound]}, (_, m) => matchMarkup(activeRound, m, true)).join('');
       }
     }
     function render() {
+      bracket = createBracket(state.teams.length);
+      activeRound = Math.min(activeRound, bracket.sizes.length);
       renderStats();
       if (mode === 'all') renderFull(); else renderCompact();
       $('#fullView').hidden = mode !== 'all';
@@ -419,48 +476,70 @@
 
     function openEditor() {
       $('#teamNames').value = state.teams.join('\n');
+      $('#teamCountInput').value = state.teams.length;
       $('#editorError').textContent = '';
       updateLineCount();
       $('#teamDialog').showModal();
     }
     function updateLineCount() {
       const names = $('#teamNames').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      $('#teamLineCount').textContent = `${names.length} / 64 teams`;
+      $('#teamLineCount').textContent = `${names.length} teams`;
+      $('#teamCountInput').value = names.length;
+    }
+    function resizeTeams() {
+      const count = Number($('#teamCountInput').value);
+      if (!Number.isSafeInteger(count) || count < 2) {
+        $('#editorError').textContent = 'Choose a whole number of at least two teams.';
+        return;
+      }
+      const names = $('#teamNames').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, count);
+      const used = new Set(names.map(n => n.toLowerCase()));
+      let next = 1;
+      while (names.length < count) {
+        const name = `Team ${String(next++).padStart(2, '0')}`;
+        if (!used.has(name.toLowerCase())) { names.push(name); used.add(name.toLowerCase()); }
+      }
+      $('#teamNames').value = names.join('\n');
+      $('#editorError').textContent = '';
+      updateLineCount();
     }
     function saveTeams() {
       const names = $('#teamNames').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      if (names.length !== 64) { $('#editorError').textContent = `You entered ${names.length} names. Exactly 64 are required.`; return; }
+      if (names.length < 2) { $('#editorError').textContent = 'Enter at least two teams.'; return; }
       if (names.some(n => n.length > 100)) { $('#editorError').textContent = 'Keep each name to 100 characters or fewer.'; return; }
-      if (new Set(names.map(n => n.toLocaleLowerCase())).size !== 64) { $('#editorError').textContent = 'Each team name must be unique.'; return; }
+      if (new Set(names.map(n => n.toLowerCase())).size !== names.length) { $('#editorError').textContent = 'Each team name must be unique.'; return; }
+      const resized = names.length !== state.teams.length;
+      if (resized && countPicks(state) && !window.confirm('Changing the team count will clear your picks. Continue?')) return;
       state.teams = names;
+      if (resized) { state.picks = blankPicks(names.length); activeRound = 0; if (names.length > 256) mode = 'round'; }
       persist();
       $('#teamDialog').close();
       render();
-      notify('Team names saved. Your existing picks are preserved.');
+      notify(resized ? 'Team count updated. Your new bracket is ready.' : 'Team names saved. Your existing picks are preserved.');
     }
 
     function shuffle() {
-      if (!window.confirm('Shuffle all 64 teams into new first-round matchups? This will clear every winner selection.')) return;
+      if (!window.confirm(`Shuffle all ${state.teams.length} teams into new first-round matchups? This will clear every winner selection.`)) return;
       for (let i = state.teams.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [state.teams[i], state.teams[j]] = [state.teams[j], state.teams[i]];
       }
-      state.picks = blankPicks();
+      state.picks = blankPicks(state.teams.length);
       persist(); render(); notify('Teams shuffled and picks reset.');
     }
     function reset() {
-      if (!state.picks.flat().some(Number.isInteger)) { notify('There are no picks to reset.'); return; }
-      if (!window.confirm('Clear all 63 winner selections? Team names and matchups will stay the same.')) return;
-      state.picks = blankPicks();
+      if (!countPicks(state)) { notify('There are no picks to reset.'); return; }
+      if (!window.confirm(`Clear all ${state.teams.length - 1} winner selections? Team names and matchups will stay the same.`)) return;
+      state.picks = blankPicks(state.teams.length);
       persist(); render(); notify('All picks cleared.');
     }
     function exportFile() {
-      const data = {format: 'Bracket Studio 64', version: 1, exportedAt: new Date().toISOString(), ...state};
+      const data = {format: 'Bracket Studio', version: 2, exportedAt: new Date().toISOString(), ...state};
       const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = 'my-64-team-bracket.json';
+      link.download = `my-${state.teams.length}-team-bracket.json`;
       document.body.appendChild(link);
       link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -470,13 +549,14 @@
       const file = event.target.files && event.target.files[0];
       event.target.value = '';
       if (!file) return;
-      if (file.size > 1024 * 1024) { notify('That file is too large for a bracket.'); return; }
       try {
         const data = JSON.parse(await file.text());
         const imported = validateState(data);
         if (!imported) { notify('Invalid bracket file. Please choose an exported Bracket Studio JSON file.'); return; }
         if (!window.confirm('Replace your current bracket with the imported bracket?')) return;
         state = imported;
+        activeRound = 0;
+        if (state.teams.length > 256) mode = 'round';
         persist(); render();
         notify('Bracket imported successfully.');
       } catch (_) { notify('Could not read this file. Please choose a valid JSON export.'); }
@@ -495,7 +575,8 @@
     $('#closeDialogBtn').addEventListener('click', () => $('#teamDialog').close());
     $('#cancelDialogBtn').addEventListener('click', () => $('#teamDialog').close());
     $('#teamNames').addEventListener('input', () => { $('#editorError').textContent = ''; updateLineCount(); });
-    $('#defaultTeamsBtn').addEventListener('click', () => { $('#teamNames').value = defaultTeams().join('\n'); updateLineCount(); $('#editorError').textContent = ''; });
+    $('#defaultTeamsBtn').addEventListener('click', () => { const count = $('#teamNames').value.split(/\r?\n/).filter(s => s.trim()).length; $('#teamNames').value = defaultTeams(Math.max(2, count)).join('\n'); updateLineCount(); $('#editorError').textContent = ''; });
+    $('#resizeTeamsBtn').addEventListener('click', resizeTeams);
     $('#saveTeamsBtn').addEventListener('click', saveTeams);
     $('#shuffleBtn').addEventListener('click', shuffle);
     $('#resetBtn').addEventListener('click', reset);
@@ -509,3 +590,4 @@
   </script>
 </body>
 </html>
+
